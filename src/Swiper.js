@@ -1,20 +1,32 @@
 import React from 'react';
 import PropTypes from 'prop-types';
+import classnames from 'classnames';
 import { autobind } from 'core-decorators';
-import { SWIPER_STYLESHEET, SWIPER_ITEM_STYLESHEET } from './constant/stylesheets';
-import Paginate from './Paginate';
+
+const DIRECTION = {
+  CURRENT: 'CURRENT',
+  PREVIOUS: 'PREVIOUS',
+  NEXT: 'NEXT',
+};
 
 export default class Swiper extends React.Component {
   static propTypes = {
     children: PropTypes.oneOfType([PropTypes.arrayOf(PropTypes.node), PropTypes.node]).isRequired,
+    isArrow: PropTypes.bool,
     isAutoRolling: PropTypes.bool,
     isPaginate: PropTypes.bool,
+    isBounce: PropTypes.bool,
     rollingSeconds: PropTypes.number,
+    duration: PropTypes.number,
+    moveRange: PropTypes.number,
+    sensitivity: PropTypes.number,
   };
 
   static defaultProps = {
+    isArrow: false,
     isAutoRolling: false,
     isPaginate: false,
+    isBounce: false,
     rollingSeconds: 2,
     duration: 0.3,
     moveRange: 0.7,
@@ -47,17 +59,51 @@ export default class Swiper extends React.Component {
     }
   }
 
+  componentDidUpdate(prevProps) {
+    if (prevProps.children !== this.props.children) {
+      this.lastIndex = this.props.children.length - 1;
+      this.setIndex(0);
+    }
+  }
+
   componentWillUnmount() {
     if (this.isNeed) {
       document.removeEventListener('touchmove', this.moveEvent, false);
       document.removeEventListener('touchend', this.endEvent, false);
       document.removeEventListener('mousemove', this.moveEvent, false);
       document.removeEventListener('mouseup', this.endEvent, false);
+      this.stopAutoRolling();
     }
   }
 
+  @autobind
+  onTouchStartEvent(e) {
+    this.stopAutoRolling();
+    this.setState({
+      isTouchDevice: true,
+      startX: e.changedTouches[0] ? e.changedTouches[0].pageX : e.pageX,
+    });
+    this.startEvent();
+  }
+
+  @autobind
+  onMouseDownEvent(e) {
+    e.preventDefault();
+    this.setState({
+      isTouchDevice: false,
+      startX: e.pageX,
+    });
+    this.startEvent();
+  }
+
+  @autobind
   setIndex(idx) {
-    const currentIndex = idx < 0 ? this.lastIndex : idx > this.lastIndex ? 0 : idx;
+    let currentIndex = idx;
+    if (idx < 0) {
+      currentIndex = this.lastIndex;
+    } else if (idx > this.lastIndex) {
+      currentIndex = 0;
+    }
     this.setState({
       currentIndex,
       beforeIndex: currentIndex === 0 ? this.lastIndex : currentIndex - 1,
@@ -83,7 +129,7 @@ export default class Swiper extends React.Component {
   moveEvent(e) {
     if (this.state.isActive) {
       const { isTouchDevice, width, startX } = this.state;
-      const moveX = isTouchDevice ? e.changedTouches[0].pageX : e.pageX;
+      const moveX = isTouchDevice && e.changedTouches[0] ? e.changedTouches[0].pageX : e.pageX;
       const movePercent = ((moveX / width) * 100 - (startX / width) * 100) * this.props.moveRange;
       if (Math.abs(movePercent) > 1 && e.cancelable) {
         e.preventDefault();
@@ -98,42 +144,23 @@ export default class Swiper extends React.Component {
   }
 
   @autobind
-  endEvent(e) {
-    if (this.state.isActive) {
-      const { currentIndex, isTouchDevice, startTime, startX } = this.state;
-      const endX = isTouchDevice ? e.changedTouches[0].pageX : e.pageX;
-      let movePercent = 0;
-      let currentIdx = currentIndex;
-      if (Math.abs(endX - startX) / (new Date().getTime() - startTime) > this.props.sensitivity) {
-        currentIdx = startX > endX ? currentIdx + 1 : currentIdx - 1;
-        movePercent = startX > endX ? -100 : 100;
+  moveByDirection(direction) {
+    const { currentIndex } = this.state;
+    let currentIdx = currentIndex;
+    let movePercent = 0;
+    if (direction === DIRECTION.PREVIOUS) {
+      if (!this.props.isBounce || (this.props.isBounce && currentIdx !== 0)) {
+        currentIdx--;
+        movePercent = 100;
       }
-      this.animationStartByMovePercent(movePercent);
-      this.anmationEndByCurrentIdx(currentIdx);
-      if (this.state.isTouchDevice) {
-        this.startAutoRolling();
+    } else if (direction === DIRECTION.NEXT) {
+      if (!this.props.isBounce || (this.props.isBounce && currentIndex !== this.lastIndex)) {
+        currentIdx++;
+        movePercent = -100;
       }
     }
-  }
-
-  @autobind
-  onTouchStartEvent(e) {
-    this.stopAutoRolling();
-    this.setState({
-      isTouchDevice: true,
-      startX: e.changedTouches[0].pageX,
-    });
-    this.startEvent();
-  }
-
-  @autobind
-  onMouseDownEvent(e) {
-    e.preventDefault();
-    this.setState({
-      isTouchDevice: false,
-      startX: e.pageX,
-    });
-    this.startEvent();
+    this.animationStartByMovePercent(movePercent);
+    this.anmationEndByCurrentIdx(currentIdx);
   }
 
   animationStartByMovePercent(movePercent) {
@@ -158,13 +185,10 @@ export default class Swiper extends React.Component {
   @autobind
   startAutoRolling() {
     if (this.props.isAutoRolling && !this.timer) {
-      this.timer = setInterval(
-        function () {
-          this.animationStartByMovePercent(-100);
-          this.anmationEndByCurrentIdx(this.state.currentIndex + 1);
-        }.bind(this),
-        this.props.rollingSeconds * 1000
-      );
+      this.timer = setInterval(() => {
+        this.animationStartByMovePercent(-100);
+        this.anmationEndByCurrentIdx(this.state.currentIndex + 1);
+      }, this.props.rollingSeconds * 1000);
     }
   }
 
@@ -176,39 +200,95 @@ export default class Swiper extends React.Component {
     }
   }
 
+  @autobind
+  renderArrow() {
+    const { currentIndex } = this.state;
+    return (
+      <React.Fragment>
+        {this.props.isBounce && currentIndex === 0 ? (
+          <div />
+        ) : (
+          <a
+            className="_codemixia_swiper_previous_button"
+            onClick={() => {
+              this.moveByDirection(DIRECTION.PREVIOUS);
+            }}>
+            <span className="_codemixia_swiper_previous_buttom_extra" />
+          </a>
+        )}
+        {this.props.isBounce && currentIndex === this.lastIndex ? (
+          <div />
+        ) : (
+          <a
+            className="_codemixia_swiper_next_button"
+            onClick={() => {
+              this.moveByDirection(DIRECTION.NEXT);
+            }}>
+            <span className="_codemixia_swiper_next_button_extra" />
+          </a>
+        )}
+      </React.Fragment>
+    );
+  }
+
+  renderPaginate() {
+    const pageArray = [];
+    for (let i = 0; i <= this.lastIndex; i++) {
+      pageArray.push(this.renderPaginateItem(i));
+    }
+    return <div className="_codemixia_swiper_paginate">{pageArray}</div>;
+  }
+
+  renderPaginateItem(idx) {
+    return (
+      <span
+        className={classnames('_codemixia_swiper_paginate_button', { on: idx === this.state.currentIndex })}
+        key={idx}
+        onClick={() => {
+          this.setIndex(idx);
+        }}
+      />
+    );
+  }
+
   render() {
     if (this.isNeed) {
       const { beforeIndex, currentIndex, afterIndex, movePercent, isActive, isDimmed, usePossible } = this.state;
       const swiperStyle = {
-        ...SWIPER_STYLESHEET,
-        transform: 'translateX(' + movePercent + '%) translateZ(0)',
-        transition: usePossible || isActive ? 'none' : 'transform ' + this.props.duration + 's ease-out',
+        transform: `translateX(${movePercent}%) translateZ(0)`,
+        transition: usePossible || isActive ? 'none' : `transform ${this.props.duration}s ease-out`,
       };
       return (
         <React.Fragment>
           <div
-            ref={this.swiperRef}
-            style={swiperStyle}
-            onTouchStart={this.onTouchStartEvent}
-            onMouseDown={this.onMouseDownEvent}
+            className="_codemixia_swiper_wrap"
             onMouseOver={this.stopAutoRolling}
-            onMouseOut={this.startAutoRolling}>
-            <div style={{ ...SWIPER_ITEM_STYLESHEET, transform: 'translateX(-100%)' }}>
-              {this.props.children[beforeIndex]}
+            onMouseOut={this.startAutoRolling}
+            onFocus={this.stopAutoRolling}
+            onBlur={this.startAutoRolling}>
+            <div
+              className="_codemixia_swiper"
+              ref={this.swiperRef}
+              style={swiperStyle}
+              onTouchStart={this.onTouchStartEvent}
+              onMouseDown={this.onMouseDownEvent}>
+              <div className="_codemixia_swiper_item" style={{ transform: 'translateX(-100%)' }}>
+                {this.props.isBounce && currentIndex === 0 ? <div /> : this.props.children[beforeIndex]}
+              </div>
+              <div className="_codemixia_swiper_item" style={{ transform: 'translateX(0)' }}>
+                {this.props.children[currentIndex]}
+              </div>
+              <div className="_codemixia_swiper_item" style={{ transform: 'translateX(100%)' }}>
+                {this.props.isBounce && currentIndex === this.lastIndex ? <div /> : this.props.children[afterIndex]}
+              </div>
+              <div className="_codemixia_swiper_transparent" style={{ zIndex: isDimmed ? '2' : '0' }} />
             </div>
-            <div style={{ ...SWIPER_ITEM_STYLESHEET, transform: 'translateX(0)' }}>
-              {this.props.children[currentIndex]}
-            </div>
-            <div style={{ ...SWIPER_ITEM_STYLESHEET, transform: 'translateX(100%)' }}>
-              {this.props.children[afterIndex]}
-            </div>
-            <div style={{ ...SWIPER_ITEM_STYLESHEET, zIndex: isDimmed ? '2' : '0' }} />
+            {this.props.isPaginate && this.lastIndex > 0 && this.renderPaginate()}
           </div>
-          {this.props.isPaginate && this.lastIndex > 0 && <Paginate current={currentIndex} last={this.lastIndex} />}
+          {this.props.isArrow && this.renderArrow()}
         </React.Fragment>
       );
-    } else {
-      return this.props.children;
     }
+    return this.props.children;
   }
 }
